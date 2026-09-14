@@ -3,7 +3,7 @@
          type="meca500_hardware::Meca500SystemHardware" 
          base_class_type="hardware_interface::SystemInterface">
     <description>
-      ROS 2 Hardware interface for Mecademic Meca500 via TCP velocity commands.
+      ROS 2 Hardware interface for Mecademic Meca500 via Joint velocity commands.
     </description>
   </class>
 </library>
