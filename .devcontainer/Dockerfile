@@ -1,17 +1,23 @@
+# syntax=docker/dockerfile:1.4
 FROM ros:humble-ros-base
 
 ARG USERNAME=rosdev
 ARG UID=1000
 ARG GID=$UID
 
-# Install some dependencies packages
-RUN apt update -q \
-    && apt upgrade -q -y \
-    && apt install -y --no-install-recommends \
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install development tooling and the ROS packages this workspace needs.
+RUN apt-get update -q \
+    && apt-get upgrade -q -y \
+    && apt-get install -y --no-install-recommends \
     software-properties-common \
+    git \
+    shellcheck \
     python3-pip \
     python3-rosdep \
     python3-colcon-common-extensions \
+    python3-colcon-mixin \
     xauth \
     ros-$ROS_DISTRO-xacro \
     ros-$ROS_DISTRO-urdf \
@@ -24,24 +30,46 @@ RUN apt update -q \
     ros-$ROS_DISTRO-ros2-controllers \
     ros-$ROS_DISTRO-joint-state-broadcaster \
     ros-$ROS_DISTRO-joint-trajectory-controller \
-    && apt clean \
+    # MoveIt 2 - required by meca500_moveit_config, previously missing entirely.
+    ros-$ROS_DISTRO-moveit-ros-move-group \
+    ros-$ROS_DISTRO-moveit-planners-ompl \
+    ros-$ROS_DISTRO-moveit-simple-controller-manager \
+    ros-$ROS_DISTRO-moveit-kinematics \
+    ros-$ROS_DISTRO-moveit-ros-visualization \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Create and switch to user
-RUN groupadd -g $GID $USERNAME \
-    && useradd -lm -u $UID -g $USERNAME -s /bin/bash $USERNAME \
-    && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-USER $USERNAME
+# Create the development user.
+# Made idempotent so the image still builds when the base image already owns
+# the requested UID/GID (varies across host platforms).
+RUN if ! getent group "$GID" >/dev/null; then groupadd -g "$GID" "$USERNAME"; fi \
+    && if ! getent passwd "$UID" >/dev/null; then \
+    useradd -lm -u "$UID" -g "$GID" -s /bin/bash "$USERNAME"; \
+    else \
+    existing="$(getent passwd "$UID" | cut -d: -f1)"; \
+    [ "$existing" = "$USERNAME" ] || usermod -l "$USERNAME" -d "/home/$USERNAME" -m "$existing"; \
+    fi \
+    && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
+    && chmod 0440 /etc/sudoers.d/$USERNAME
 
-# Create workspace so that user own this directory
+# rosdep needs to be initialised before `rosdep install` can work.
+# The base image may already have done this, so tolerate failure.
+RUN rosdep init 2>/dev/null || true
+
+USER $USERNAME
+RUN rosdep update --rosdistro "$ROS_DISTRO" || true
+
+# Create the workspace so the user owns it.
 RUN mkdir -p /home/$USERNAME/ros2_ws/src
 WORKDIR /home/$USERNAME/ros2_ws
 
-# Copy configuration files
-RUN echo 'source /opt/ros/'$ROS_DISTRO'/setup.bash' >> /home/$USERNAME/.bashrc \
-    && echo 'source /home/'$USERNAME'/ros2_ws/install/setup.bash' >> /home/$USERNAME/.bashrc
+# Source the underlay always, and the overlay only once it has been built.
+RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /home/$USERNAME/.bashrc \
+    && echo "[ -f \$HOME/ros2_ws/install/setup.bash ] && source \$HOME/ros2_ws/install/setup.bash" \
+    >> /home/$USERNAME/.bashrc
 
-# Setup entrypoint
-COPY ./ros_entrypoint.sh /
+# --chmod guarantees the entrypoint is executable regardless of the host's
+# filesystem permissions (Windows/NTFS checkouts do not preserve the exec bit).
+COPY --chmod=0755 ./ros_entrypoint.sh /ros_entrypoint.sh
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["bash"]
