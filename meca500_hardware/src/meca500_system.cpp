@@ -397,12 +397,21 @@ hardware_interface::CallbackReturn Meca500SystemHardware::on_deactivate(
   is_shutting_down_.store(true);
   is_active_.store(false);
 
-  // Closing the monitor socket first ensures recv()/poll() unblock promptly.
-  close_socket(monitor_fd_);
+  // Unblock the thread's poll()/recv() with shutdown() rather than close().
+  // close() frees the descriptor number immediately, and the kernel may
+  // reissue it while receive_data_loop() is still between its load of
+  // monitor_fd_ and the syscall -- it would then poll or read an unrelated
+  // socket. shutdown() wakes the thread without releasing the number.
+  if (monitor_fd_ >= 0) {
+    ::shutdown(monitor_fd_, SHUT_RDWR);
+  }
 
   if (tcp_receive_thread_.joinable()) {
     tcp_receive_thread_.join();
   }
+
+  // Safe to release the descriptor now: the only other user has exited.
+  close_socket(monitor_fd_);
 
   // Send zero velocity to stop all motion
   send_command("MoveJointsVel(0,0,0,0,0,0)");
