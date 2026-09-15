@@ -70,9 +70,19 @@ private:
   std::string robot_ip_;
 
   // --- Interface Data Storage ---
+  // Exported to controllers as raw pointers by export_state_interfaces().
+  // Controllers read these without any lock, so they must only ever be
+  // written from read(), on the control thread.
   std::vector<double> hw_joint_states_position_;
   std::vector<double> hw_joint_states_velocity_;
   std::vector<double> hw_joint_commands_velocity_;
+
+  // --- Monitoring Staging Buffer ---
+  // Written by the monitor thread under state_mutex_, copied into the
+  // exported vectors by read(). This is what keeps the two threads off
+  // the same memory.
+  std::vector<double> rt_position_;
+  std::vector<double> rt_velocity_;
 
   // --- Asynchronous Communication Setup ---
   std::thread tcp_receive_thread_;

@@ -259,6 +259,8 @@ hardware_interface::CallbackReturn Meca500SystemHardware::on_init(
   hw_joint_states_position_.resize(6, 0.0);
   hw_joint_states_velocity_.resize(6, 0.0);
   hw_joint_commands_velocity_.resize(6, 0.0);
+  rt_position_.resize(6, 0.0);
+  rt_velocity_.resize(6, 0.0);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -432,14 +434,19 @@ hardware_interface::return_type Meca500SystemHardware::read(
     return hardware_interface::return_type::ERROR;
   }
 
-  // The background thread continuously updates position/velocity from
-  // the monitoring port. We just copy the latest values under the lock.
-  // This keeps read() non-blocking and deterministic.
-  // (No lock needed for atomic-friendly patterns, but we use the mutex
-  //  since we update 6 doubles at a time.)
+  // The background thread stages the latest monitoring sample in
+  // rt_position_ / rt_velocity_ under state_mutex_. Copy it into the
+  // exported vectors here, on the control thread.
+  //
+  // This copy is the whole point: export_state_interfaces() hands
+  // controllers raw pointers into hw_joint_states_*, and controllers read
+  // them without taking state_mutex_ (they cannot — it is private). Writing
+  // those vectors from the monitor thread would therefore be an
+  // unsynchronized race, and a controller could observe axes 1-3 from one
+  // sample and axes 4-6 from the next.
   std::lock_guard<std::mutex> lock(state_mutex_);
-  // Data is already in hw_joint_states_position_ / hw_joint_states_velocity_
-  // (written by receive_data_loop), nothing else to do here.
+  hw_joint_states_position_ = rt_position_;
+  hw_joint_states_velocity_ = rt_velocity_;
 
   return hardware_interface::return_type::OK;
 }
@@ -567,13 +574,13 @@ void Meca500SystemHardware::receive_data_loop()
         // Real-time joint positions (degrees from Meca500 → radians for ROS)
         std::lock_guard<std::mutex> lock(state_mutex_);
         for (int i = 0; i < 6; i++) {
-          hw_joint_states_position_[i] = values[i] * DEG_TO_RAD;
+          rt_position_[i] = values[i] * DEG_TO_RAD;
         }
       } else if (code == MONITOR_RT_JOINT_VELOCITY_ID && parse_joint_values(data, values)) {
         // Real-time joint velocities (degrees/s from Meca500 → radians/s for ROS)
         std::lock_guard<std::mutex> lock(state_mutex_);
         for (int i = 0; i < 6; i++) {
-          hw_joint_states_velocity_[i] = values[i] * DEG_TO_RAD;
+          rt_velocity_[i] = values[i] * DEG_TO_RAD;
         }
       }
     }
