@@ -385,15 +385,11 @@ hardware_interface::CallbackReturn Meca500SystemHardware::on_activate(
 }
 
 // -------------------------------------------------------
-// 4. Lifecycle: Deactivate
+// 4. Lifecycle: Teardown
 // -------------------------------------------------------
 
-hardware_interface::CallbackReturn Meca500SystemHardware::on_deactivate(
-  const rclcpp_lifecycle::State & /*previous_state*/)
+void Meca500SystemHardware::stop_monitor_thread()
 {
-  RCLCPP_INFO(LOGGER, "Deactivating... stopping robot.");
-
-  // Signal the monitoring thread to stop
   is_shutting_down_.store(true);
   is_active_.store(false);
 
@@ -412,6 +408,46 @@ hardware_interface::CallbackReturn Meca500SystemHardware::on_deactivate(
 
   // Safe to release the descriptor now: the only other user has exited.
   close_socket(monitor_fd_);
+}
+
+Meca500SystemHardware::~Meca500SystemHardware()
+{
+  // Last line of defence. If the component is destroyed without a clean
+  // deactivate -- a controller_manager shutdown path, an exception, a failed
+  // lifecycle transition -- a joinable std::thread destructor would call
+  // std::terminate(). No robot commands are sent here: the object is going
+  // away and the socket may already be gone.
+  stop_monitor_thread();
+  close_socket(control_fd_);
+}
+
+hardware_interface::CallbackReturn Meca500SystemHardware::on_cleanup(
+  const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  stop_monitor_thread();
+  close_socket(control_fd_);
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn Meca500SystemHardware::on_error(
+  const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  RCLCPP_ERROR(LOGGER, "Entering error state, tearing down connections.");
+  stop_monitor_thread();
+  close_socket(control_fd_);
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+// -------------------------------------------------------
+// 5. Lifecycle: Deactivate
+// -------------------------------------------------------
+
+hardware_interface::CallbackReturn Meca500SystemHardware::on_deactivate(
+  const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  RCLCPP_INFO(LOGGER, "Deactivating... stopping robot.");
+
+  stop_monitor_thread();
 
   // Send zero velocity to stop all motion
   send_command("MoveJointsVel(0,0,0,0,0,0)");
@@ -430,7 +466,7 @@ hardware_interface::CallbackReturn Meca500SystemHardware::on_deactivate(
 }
 
 // -------------------------------------------------------
-// 5. Real-Time Read Loop
+// 6. Real-Time Read Loop
 // -------------------------------------------------------
 
 hardware_interface::return_type Meca500SystemHardware::read(
@@ -461,7 +497,7 @@ hardware_interface::return_type Meca500SystemHardware::read(
 }
 
 // -------------------------------------------------------
-// 6. Real-Time Write Loop
+// 7. Real-Time Write Loop
 // -------------------------------------------------------
 
 hardware_interface::return_type Meca500SystemHardware::write(
@@ -495,7 +531,7 @@ hardware_interface::return_type Meca500SystemHardware::write(
 }
 
 // -------------------------------------------------------
-// 7. Background Monitoring Thread
+// 8. Background Monitoring Thread
 // -------------------------------------------------------
 
 void Meca500SystemHardware::receive_data_loop()

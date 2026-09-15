@@ -37,6 +37,11 @@ class Meca500SystemHardware : public hardware_interface::SystemInterface
 public:
   RCLCPP_SHARED_PTR_DEFINITIONS(Meca500SystemHardware)
 
+  // Guarantees the monitoring thread is stopped even if the component is
+  // destroyed without a clean deactivate. A joinable std::thread destructor
+  // calls std::terminate().
+  ~Meca500SystemHardware() override;
+
   // ---------------------------------------------------------
   // Lifecycle Methods
   // ---------------------------------------------------------
@@ -47,6 +52,12 @@ public:
     const rclcpp_lifecycle::State & previous_state) override;
 
   hardware_interface::CallbackReturn on_deactivate(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_cleanup(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  hardware_interface::CallbackReturn on_error(
     const rclcpp_lifecycle::State & previous_state) override;
 
   // ---------------------------------------------------------
@@ -106,6 +117,10 @@ private:
 
   // Background worker function to continuously poll the TCP monitor port
   void receive_data_loop();
+
+  // Single teardown path for the monitoring thread and its socket.
+  // Safe to call more than once, and from any lifecycle state.
+  void stop_monitor_thread();
 
   // Parse a Meca500 response message of the form [code][data]
   static bool parse_response(const std::string & msg, int & code, std::string & data);
